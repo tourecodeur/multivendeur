@@ -1,0 +1,341 @@
+// config/database.php
+<?php
+return [
+    'host' => 'localhost',
+    'dbname' => 'multivendor_ecommerce',
+    'username' => 'root',
+    'password' => '',
+];
+
+// classes/Database.php
+<?php
+class Database {
+    private $conn;
+    
+    public function __construct() {
+        $config = require_once '../config/database.php';
+        try {
+            $this->conn = new PDO(
+                "mysql:host={$config['host']};dbname={$config['dbname']}",
+                $config['username'],
+                $config['password']
+            );
+            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        } catch(PDOException $e) {
+            die("Erreur de connexion: " . $e->getMessage());
+        }
+    }
+
+    public function getConnection() {
+        return $this->conn;
+    }
+}
+
+// classes/User.php
+<?php
+class User {
+    private $db;
+    private $table = "users";
+
+    public function __construct($db) {
+        $this->db = $db;
+    }
+
+    public function login($email, $password) {
+        $query = "SELECT * FROM {$this->table} WHERE email = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->execute([$email]);
+        
+        if($user = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if(password_verify($password, $user['password'])) {
+                $_SESSION['user_id'] = $user['id'];
+                $_SESSION['user_type'] = $user['user_type'];
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public function register($data) {
+        $query = "INSERT INTO {$this->table} 
+                 (nom, email, password, user_type) 
+                 VALUES (?, ?, ?, ?)";
+        $stmt = $this->db->prepare($query);
+        return $stmt->execute([
+            $data['nom'],
+            $data['email'],
+            password_hash($data['password'], PASSWORD_DEFAULT),
+            $data['user_type']
+        ]);
+    }
+}
+
+// classes/Vendor.php
+<?php
+class Vendor {
+    private $db;
+    private $table = "vendors";
+
+    public function __construct($db) {
+        $this->db = $db;
+    }
+
+    public function getVendorDetails($id) {
+        $query = "SELECT * FROM {$this->table} WHERE id = ?";
+        $stmt = $this->db->prepare($query);
+        $stmt->execute([$id]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    public function updateProfile($data) {
+        $query = "UPDATE {$this->table} 
+                 SET nom_boutique = ?, description = ?, adresse = ? 
+                 WHERE id = ?";
+        $stmt = $this->db->prepare($query);
+        return $stmt->execute([
+            $data['nom_boutique'],
+            $data['description'],
+            $data['adresse'],
+            $data['id']
+        ]);
+    }
+}
+
+// classes/Product.php
+<?php
+class Product {
+    private $db;
+    private $table = "products";
+
+    public function __construct($db) {
+        $this->db = $db;
+    }
+
+    public function addProduct($data) {
+        $query = "INSERT INTO {$this->table} 
+                 (nom, description, prix, stock, vendor_id, categorie) 
+                 VALUES (?, ?, ?, ?, ?, ?)";
+        $stmt = $this->db->prepare($query);
+        return $stmt->execute([
+            $data['nom'],
+            $data['description'],
+            $data['prix'],
+            $data['stock'],
+            $data['vendor_id'],
+            $data['categorie']
+        ]);
+    }
+
+    public function getProducts($vendor_id = null) {
+        $query = "SELECT * FROM {$this->table}";
+        if($vendor_id) {
+            $query .= " WHERE vendor_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->execute([$vendor_id]);
+        } else {
+            $stmt = $this->db->prepare($query);
+            $stmt->execute();
+        }
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
+// classes/Order.php
+<?php
+class Order {
+    private $db;
+    private $table = "orders";
+
+    public function __construct($db) {
+        $this->db = $db;
+    }
+
+    public function createOrder($data) {
+        $query = "INSERT INTO {$this->table} 
+                 (user_id, total, statut) 
+                 VALUES (?, ?, ?)";
+        $stmt = $this->db->prepare($query);
+        return $stmt->execute([
+            $data['user_id'],
+            $data['total'],
+            'en_attente'
+        ]);
+    }
+
+    public function getOrders($vendor_id = null) {
+        $query = "SELECT o.*, od.* FROM {$this->table} o 
+                 JOIN order_details od ON o.id = od.order_id";
+        if($vendor_id) {
+            $query .= " WHERE od.vendor_id = ?";
+            $stmt = $this->db->prepare($query);
+            $stmt->execute([$vendor_id]);
+        } else {
+            $stmt = $this->db->prepare($query);
+            $stmt->execute();
+        }
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
+// classes/Cart.php
+<?php
+class Cart {
+    public function addItem($product_id, $quantity) {
+        if(!isset($_SESSION['cart'])) {
+            $_SESSION['cart'] = [];
+        }
+        if(isset($_SESSION['cart'][$product_id])) {
+            $_SESSION['cart'][$product_id] += $quantity;
+        } else {
+            $_SESSION['cart'][$product_id] = $quantity;
+        }
+    }
+
+    public function removeItem($product_id) {
+        if(isset($_SESSION['cart'][$product_id])) {
+            unset($_SESSION['cart'][$product_id]);
+        }
+    }
+
+    public function getTotal() {
+        $total = 0;
+        if(isset($_SESSION['cart'])) {
+            foreach($_SESSION['cart'] as $product_id => $quantity) {
+                // Get product price from database and calculate
+                // This is simplified for the example
+                $product = new Product($this->db);
+                $details = $product->getProductDetails($product_id);
+                $total += $details['prix'] * $quantity;
+            }
+        }
+        return $total;
+    }
+}
+
+// includes/header.php
+<?php
+session_start();
+?>
+<!DOCTYPE html>
+<html>
+<head>
+    <title>E-commerce Multivendeur</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="/">Accueil</a>
+            <?php if(!isset($_SESSION['user_id'])): ?>
+                <a href="/login.php">Connexion</a>
+                <a href="/register.php">Inscription</a>
+            <?php else: ?>
+                <a href="/cart.php">Panier</a>
+                <?php if($_SESSION['user_type'] == 'vendor'): ?>
+                    <a href="/vendor/dashboard.php">Dashboard Vendeur</a>
+                <?php endif; ?>
+                <a href="/logout.php">Déconnexion</a>
+            <?php endif; ?>
+        </nav>
+    </header>
+
+// includes/footer.php
+    <footer>
+        <p>&copy; <?php echo date('Y'); ?> E-commerce Multivendeur</p>
+    </footer>
+    <script src="/assets/js/main.js"></script>
+</body>
+</html>
+
+// public/index.php
+<?php
+require_once '../includes/header.php';
+require_once '../classes/Database.php';
+require_once '../classes/Product.php';
+
+$db = new Database();
+$product = new Product($db->getConnection());
+$products = $product->getProducts();
+?>
+
+<div class="products-grid">
+    <?php foreach($products as $product): ?>
+        <div class="product-card">
+            <img src="/assets/images/products/<?php echo $product['image']; ?>" alt="<?php echo $product['nom']; ?>">
+            <h3><?php echo $product['nom']; ?></h3>
+            <p><?php echo $product['description']; ?></p>
+            <p class="price"><?php echo number_format($product['prix'], 2); ?> €</p>
+            <form action="/cart.php" method="POST">
+                <input type="hidden" name="product_id" value="<?php echo $product['id']; ?>">
+                <input type="number" name="quantity" value="1" min="1">
+                <button type="submit">Ajouter au panier</button>
+            </form>
+        </div>
+    <?php endforeach; ?>
+</div>
+
+<?php require_once '../includes/footer.php'; ?>
+
+// vendor/dashboard.php
+<?php
+require_once '../includes/header.php';
+require_once '../classes/Database.php';
+require_once '../classes/Vendor.php';
+require_once '../classes/Product.php';
+require_once '../classes/Order.php';
+
+if(!isset($_SESSION['user_id']) || $_SESSION['user_type'] != 'vendor') {
+    header('Location: /login.php');
+    exit;
+}
+
+$db = new Database();
+$vendor = new Vendor($db->getConnection());
+$product = new Product($db->getConnection());
+$order = new Order($db->getConnection());
+
+$vendorDetails = $vendor->getVendorDetails($_SESSION['user_id']);
+$products = $product->getProducts($_SESSION['user_id']);
+$orders = $order->getOrders($_SESSION['user_id']);
+?>
+
+<div class="vendor-dashboard">
+    <h1>Dashboard Vendeur</h1>
+    
+    <section class="vendor-stats">
+        <div class="stat-card">
+            <h3>Produits</h3>
+            <p><?php echo count($products); ?></p>
+        </div>
+        <div class="stat-card">
+            <h3>Commandes</h3>
+            <p><?php echo count($orders); ?></p>
+        </div>
+    </section>
+
+    <section class="recent-orders">
+        <h2>Commandes récentes</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Client</th>
+                    <th>Total</th>
+                    <th>Statut</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach($orders as $order): ?>
+                    <tr>
+                        <td><?php echo $order['id']; ?></td>
+                        <td><?php echo $order['user_id']; ?></td>
+                        <td><?php echo number_format($order['total'], 2); ?> €</td>
+                        <td><?php echo $order['statut']; ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </section>
+</div>
+
+<?php require_once '../includes/footer.php'; ?>
